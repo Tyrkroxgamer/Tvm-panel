@@ -6,7 +6,7 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 890
+    timeout-minutes: 360
 
     steps:
       - name: Configure Core RDP Settings
@@ -70,22 +70,31 @@ jobs:
 
       - name: Establish Tailscale Connection (Login Link)
         run: |
+          $ErrorActionPreference = "Continue"
           $ts  = "$env:ProgramFiles\Tailscale\tailscale.exe"
           $out = "$env:TEMP\ts_out.txt"
           $err = "$env:TEMP\ts_err.txt"
+          Remove-Item $out, $err -Force -ErrorAction SilentlyContinue
 
           # Bina auth key ke up chalao, output file me jayega
-          Start-Process $ts -ArgumentList "up","--unattended","--hostname=gh-runner-$env:GITHUB_RUN_ID" `
-            -RedirectStandardOutput $out -RedirectStandardError $err -NoNewWindow
+          $p = Start-Process $ts -ArgumentList "up","--unattended","--hostname=gh-runner-$env:GITHUB_RUN_ID" `
+            -RedirectStandardOutput $out -RedirectStandardError $err -NoNewWindow -PassThru
 
           # Login link pakdo
           $link = $null
+          $text = ""
           for ($i = 0; $i -lt 60 -and -not $link; $i++) {
               Start-Sleep -Seconds 2
-              $text = (Get-Content $out, $err -ErrorAction SilentlyContinue) -join "`n"
+              $text = "$(Get-Content $out -Raw -ErrorAction SilentlyContinue)`n$(Get-Content $err -Raw -ErrorAction SilentlyContinue)"
               if ($text -match 'https://login\.tailscale\.com/\S+') { $link = $Matches[0] }
+              elseif ($p.HasExited) { break }
           }
-          if (-not $link) { Write-Error "Login link nahi mila"; exit 1 }
+          if (-not $link) {
+              Write-Host "---- tailscale output ----"
+              Write-Host $text
+              Write-Host "exit code: $($p.ExitCode)"
+              exit 1
+          }
 
           Write-Host "`n=============================="
           Write-Host " TAILSCALE LOGIN LINK (isse kholo):"
@@ -96,11 +105,12 @@ jobs:
           $tsIP = $null
           for ($i = 0; $i -lt 120 -and -not $tsIP; $i++) {
               Start-Sleep -Seconds 5
-              $r = (& $ts ip -4 2>$null | Select-Object -First 1)
-              if ($r -match '^\d+\.\d+\.\d+\.\d+$') { $tsIP = $r }
+              $r = (cmd /c "`"$ts`" ip -4 2>nul" | Select-Object -First 1)
+              if ("$r" -match '^\d+\.\d+\.\d+\.\d+$') { $tsIP = "$r".Trim() }
           }
-          if (-not $tsIP) { Write-Error "Login nahi hua, Tailscale IP nahi mila"; exit 1 }
+          if (-not $tsIP) { Write-Host "Login nahi hua, Tailscale IP nahi mila"; exit 1 }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          exit 0
 
       - name: Verify RDP Accessibility
         run: |
@@ -122,5 +132,5 @@ jobs:
 
           while ($true) {
               Write-Host "[$(Get-Date)] RDP Active"
-              Start-Sleep -Seconds 30000
+              Start-Sleep -Seconds 300
           }
